@@ -1,0 +1,17 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "bladr"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Switch KDE compositing between the 7900 XT eGPU and the Intel iGPU",
+        "Icon": "video-display",
+        "Id": "org.bladr.gpumode",
+        "Name": "GPU Mode",
+        "Version": "1.0"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
