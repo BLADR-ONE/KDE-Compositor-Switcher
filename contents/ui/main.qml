@@ -26,10 +26,12 @@ PlasmoidItem {
             // Only parse commands that end by cat-ing the conf file
             if (source.indexOf("kwin-gpu.conf") !== -1 && source.indexOf("cat ") !== -1) {
                 var out = data["stdout"] || ""
-                if (out.indexOf("amd_egpu") !== -1) {
-                    root.mode = "egpu"
-                } else if (out.indexOf("intel_igpu") !== -1) {
-                    root.mode = "igpu"
+                var amd = out.indexOf("amd_egpu")
+                var intel = out.indexOf("intel_igpu")
+                if (amd !== -1 && (intel === -1 || amd < intel)) {
+                    root.mode = "egpu"      // AMD listed first -> renders on 7900 XT
+                } else if (intel !== -1) {
+                    root.mode = "igpu"      // Intel listed first -> renders on iGPU
                 } else {
                     root.mode = "auto"
                 }
@@ -50,8 +52,10 @@ PlasmoidItem {
     }
 
     function setIgpu() {
+        // Intel FIRST (render device), AMD second (scanout only) --
+        // frees the 7900 XT's VRAM while the eGPU monitor keeps working.
         shell.exec("mkdir -p $HOME/.config/environment.d && " +
-                   "printf 'KWIN_DRM_DEVICES=/dev/dri/intel_igpu\\n' > " + confPath +
+                   "printf 'KWIN_DRM_DEVICES=/dev/dri/intel_igpu:/dev/dri/amd_egpu\\n' > " + confPath +
                    " && cat " + confPath)
     }
 
@@ -132,7 +136,7 @@ PlasmoidItem {
             checkable: true
             checked: root.mode === "igpu"
             onClicked: root.setIgpu()
-            PC3.ToolTip.text: "Desktop composited on Intel. Full 20GB VRAM free for LLMs; also safe without the eGPU."
+            PC3.ToolTip.text: "Desktop composited on Intel; 7900 XT only drives the monitor. VRAM free for LLMs. Also safe without the eGPU."
             PC3.ToolTip.visible: hovered
             PC3.ToolTip.delay: 600
         }
