@@ -1,181 +1,87 @@
 # GPU Mode — KDE Plasma 6 Applet
 
-A small Plasma panel/system-tray widget that switches which GPU KWin uses for
-desktop compositing on a hybrid + eGPU laptop. Built for a setup with an Intel
-iGPU and an AMD RX 7900 XT connected via M.2 OcuLink, where the external
-monitor is physically plugged into the eGPU.
+A Plasma panel / system-tray / desktop widget that lets you pick which GPU
+KWin uses as its **compositing device** on a multi-GPU Linux system: hybrid
+iGPU+dGPU laptops, eGPU setups (Thunderbolt/OcuLink), or desktops with more
+than one graphics card (Intel, AMD, NVIDIA, in any combination). It shows
+live per-GPU sensors (name, VRAM, utilization, temperature) and never
+changes anything without an explicit action from you.
 
 ## Why this exists
 
-KWin (Plasma's Wayland compositor) picks one DRM device as its primary render
-device. On this machine that choice matters a lot:
+KWin (Plasma's Wayland compositor) picks one DRM device as its primary
+render device, read once from the `KWIN_DRM_DEVICES` environment variable at
+session start. On multi-GPU systems that choice has real consequences:
 
-- **Compositing on the eGPU (7900 XT)** removes a cross-GPU copy from every
-  frame and dramatically improves gaming (measured: Elden Ring went from
-  ~40 fps spiky to 60 fps 1% lows at max settings).
-- **Compositing on the iGPU (Intel)** frees the eGPU's VRAM. When large local
-  LLM models fill the 7900 XT's 20 GB, KWin's buffers living in that VRAM get
-  evicted and the desktop stutters badly. Moving compositing to Intel makes
-  desktop smoothness independent of eGPU VRAM pressure.
+- **Compositing on a discrete/external GPU** removes a cross-GPU copy from
+  every frame — useful when your displays are attached to that GPU (gaming,
+  external monitors on an eGPU).
+- **Compositing on the integrated GPU** frees the discrete GPU's VRAM
+  entirely for compute/gaming workloads, at the cost of a small per-frame
+  copy for anything that still needs to scan out through the other card.
 
-KWin reads its device preference from the `KWIN_DRM_DEVICES` environment
-variable **once, at session start**. There is no live handoff — switching
-modes requires a logout/login. The widget therefore does two things: writes
-the config, and offers an explicit "log out now" button. It never logs out
-automatically.
+There is no live handoff between the two — switching the compositing GPU
+requires a logout/login. The widget therefore does two things: writes the
+config, and offers an explicit "log out now" button. It never logs out
+automatically, and (with the default setting) always asks for confirmation
+before writing a new configuration.
 
-## The mechanism
+## How it works
 
-### 1. Stable device names (udev)
+### 1. Detection
+
+On load (and every time the popup expands), the widget scans
+`/sys/class/drm/card*` for present GPUs, reading each device's PCI slot,
+driver, vendor ID and boot-VGA flag, and cross-checking presence against
+`/dev/dri/by-path/`. Vendor is identified from the PCI vendor ID
+(Intel/AMD/NVIDIA); a friendly name comes from `nvidia-smi` (NVIDIA),
+`lspci` (everyone else), or a generic `<Vendor> GPU (0x<id>)` fallback. No
+GPU name or path is ever hardcoded — everything is discovered at runtime, so
+the same package works on any machine.
+
+### 2. The colon problem, and the symlink farm
 
 `KWIN_DRM_DEVICES` is a **colon-separated** list. This has two consequences:
 
-- Plain `/dev/dri/cardN` names are unstable — the numbering shuffles between
-  boots, especially with a hotpluggable third GPU (NVIDIA dGPU).
-- The stable `/dev/dri/by-path/pci-0000:31:00.0-card` names **cannot be used**
-  because they contain colons; KWin splits them into garbage fragments and
-  then fails with "No suitable DRM devices" → login boot-loop. (This was
-  discovered the hard way.)
+- Plain `/dev/dri/cardN` names are unstable — the numbering can shuffle
+  between boots, especially with a hotpluggable GPU.
+- The stable `/dev/dri/by-path/pci-0000:01:00.0-card` names **cannot be used
+  directly** because they contain colons; KWin splits them into garbage
+  fragments and then fails with "No suitable DRM devices" → a login
+  boot-loop. (This was discovered the hard way, on real hardware.)
 
-The fix is a udev rule creating colon-free, PCI-address-pinned symlinks
-(`/etc/udev/rules.d/99-gpu-names.rules`):
+The fix is a **colon-free symlink farm** the plasmoid maintains itself, at
+`~/.local/share/gpumode/dev/` (e.g. `gpu-0000_01_00_0 →
+/dev/dri/by-path/pci-0000:01:00.0-card`), regenerated every time you apply a
+mode. It lives outside the plasmoid's package directory so a
+`kpackagetool6 --upgrade`/`--remove` can never leave it dangling, and it
+requires no root access and no manual udev rules — zero-root, boot-stable,
+colon-safe, on any machine.
 
-```
-SUBSYSTEM=="drm", KERNEL=="card*", KERNELS=="0000:31:00.0", SYMLINK+="dri/amd_egpu"
-SUBSYSTEM=="drm", KERNEL=="card*", KERNELS=="0000:00:02.0", SYMLINK+="dri/intel_igpu"
-```
+### 3. Applying a mode
 
-Note: after creating the rule, trigger with `--action=add`
-(`sudo udevadm trigger --subsystem-match=drm --action=add`) — a plain
-"change" trigger does not create the symlinks. Real boots emit add events
-natively, so the links regenerate automatically thereafter.
+Selecting a GPU (or "Auto") writes one line to
+`~/.config/environment.d/kwin-gpu.conf` (read by systemd's user session and
+inherited by KWin):
 
-**Porting to another machine:** only the PCI addresses in this rule change.
-Find them with `lspci | grep -i vga`.
+- **A specific GPU**: `KWIN_DRM_DEVICES=<chosen>:<other present GPUs, by
+  ascending PCI slot>`. The chosen GPU renders; the others stay listed so
+  their attached displays keep working for scanout.
+- **Auto (system default)**: the conf file is removed entirely, and KWin
+  picks on its own.
 
-### 2. The two modes
+Only GPUs currently present are ever written into the list, so unplugging an
+eGPU (or a dock) doesn't leave a stale, unopenable device blocking KWin —
+it just falls through to whatever else is present.
 
-The widget writes one line to `~/.config/environment.d/kwin-gpu.conf`
-(read by systemd's user session and inherited by KWin):
-
-| Mode | File contents | Effect |
-|---|---|---|
-| eGPU (gaming) | `KWIN_DRM_DEVICES=/dev/dri/amd_egpu:/dev/dri/intel_igpu` | AMD renders + scans out. Intel is fallback. |
-| iGPU (LLM / travel) | `KWIN_DRM_DEVICES=/dev/dri/intel_igpu:/dev/dri/amd_egpu` | Intel renders; AMD stays in the session **for scanout only**. |
-
-Key semantics: **the first device in the list is the render device; later
-devices remain usable for display scanout.** This is why iGPU mode still
-lists the AMD card — the external monitor is plugged into it. An earlier
-version wrote Intel *only*, which made KWin drop the AMD device entirely,
-taking the eGPU-connected monitor (the only usable display, lid closed) with
-it → black screen. Both current modes keep both devices listed, which also
-makes both modes safe when the eGPU is disconnected: the missing device
-simply fails to open and KWin falls through to Intel + laptop panel.
-
-In iGPU mode the AMD card only holds a scanout framebuffer (tens of MB) plus
-a per-frame Intel→AMD copy for the desktop — negligible for desktop use, and
-it cannot be evicted into stutter by VRAM pressure the way full compositing
-buffers can.
-
-### 3. Recovery (if a bad config ever locks the session again)
-
-`Ctrl+Alt+F3` → TTY login → `rm ~/.config/environment.d/kwin-gpu.conf` →
-back to SDDM (`Ctrl+Alt+F2` or F1) → log in. KWin auto-picks with no
-override.
-
-## Package structure
-
-```
-org.bladr.gpumode/
-├── metadata.json          # applet identity + tray eligibility
-└── contents/
-    └── ui/
-        └── main.qml       # all logic and UI (single file)
-```
-
-### metadata.json
-
-Standard Plasma 6 applet metadata (`KPackageStructure: "Plasma/Applet"`,
-`X-Plasma-API-Minimum-Version: "6.0"`). One non-obvious key:
-
-- `"X-Plasma-NotificationAreaCategory": "Hardware"` — makes the applet
-  eligible for the **system tray** (Configure System Tray → Entries → set
-  "GPU Mode" to Shown). Without this key it can only live in a panel.
-
-### main.qml — structure
-
-Root element is `PlasmoidItem` (Plasma 6 API). State is one string property:
-
-```
-mode: "egpu" | "igpu" | "auto" | "unknown"
-```
-
-- `auto` = the conf file doesn't exist (KWin auto-picks; no override)
-- `unknown` = not yet read (transient, at startup)
-
-**Shell access** is via the classic `executable` dataengine, imported through
-the compatibility module `org.kde.plasma.plasma5support`
-(`P5Support.DataSource`). This is the standard way for a pure-QML applet to
-run commands in Plasma 6 without a C++ plugin. Pattern:
-
-```qml
-P5Support.DataSource {
-    engine: "executable"
-    connectedSources: []
-    onNewData: function (source, data) { ...; disconnectSource(source) }
-    function exec(cmd) { connectSource(cmd) }
-}
-```
-
-The command string itself is the source key; `disconnectSource` after each
-result makes it one-shot.
-
-**State reading:** every mode-setting command chains `&& cat <conf>` so the
-same `onNewData` handler that observes writes also re-parses the real file —
-the widget never trusts its own memory of the mode. It also re-reads on
-`Component.onCompleted` and every time the popup expands
-(`onExpandedChanged`). This keeps it in sync with external edits (e.g. a
-`gpu-mode` shell function writing the same file).
-
-**Mode parsing:** since *both* device names appear in *both* configs, mode is
-determined by **which name appears first** in the file (i.e. which is the
-render device), not by presence:
-
-```qml
-var amd = out.indexOf("amd_egpu")
-var intel = out.indexOf("intel_igpu")
-mode = (amd !== -1 && (intel === -1 || amd < intel)) ? "egpu"
-     : (intel !== -1) ? "igpu" : "auto"
-```
-
-**Logout** uses `gdbus` (ships with glib2, always present) rather than
-`qdbus` (needs qt6-tools, not installed by default):
-
-```
-gdbus call --session --dest org.kde.Shutdown \
-  --object-path /Shutdown --method org.kde.Shutdown.logout
-```
-
-**UI layout:**
-
-- `compactRepresentation` (panel/tray icon): a `Kirigami.Icon` whose source
-  reflects the mode, plus a small colored status dot (green = eGPU,
-  yellow = iGPU, grey = auto/unknown) drawn as a `Rectangle` overlay.
-  Clicking toggles `root.expanded`.
-- `fullRepresentation` (popup): heading, current-mode label, two checkable
-  `PC3.Button`s (checked state bound to `mode`, clicking writes the config
-  immediately), a "changes apply at next login" hint, and the explicit
-  "Apply now — log out" button at the bottom.
-
-## Install / upgrade / debug
+## Install / first run (no root required)
 
 ```fish
-# install (from the directory containing org.bladr.gpumode/)
-kpackagetool6 --type Plasma/Applet --install org.bladr.gpumode
+# install (from the directory containing this repo's contents/ + metadata.json)
+kpackagetool6 --type Plasma/Applet --install .
 
-# upgrade after editing
-kpackagetool6 --type Plasma/Applet --upgrade org.bladr.gpumode
-systemctl --user restart plasma-plasmashell
+# upgrade after an update
+kpackagetool6 --type Plasma/Applet --upgrade .
 
 # run standalone with QML errors printed to the terminal (best debug loop)
 plasmawindowed org.bladr.gpumode
@@ -184,17 +90,45 @@ plasmawindowed org.bladr.gpumode
 kpackagetool6 --type Plasma/Applet --remove org.bladr.gpumode
 ```
 
-Installed location: `~/.local/share/plasma/plasmoids/org.bladr.gpumode/` —
-you can edit `main.qml` there directly and restart plasmashell to iterate.
+After installing, add the widget to a panel, the system tray (enable it via
+*Configure System Tray → Entries*), or the desktop.
 
-## Ideas for future work
+## Features
 
-- Third mode: NVIDIA dGPU handling for the hybrid/travel case (currently the
-  NVIDIA card is deliberately excluded from `KWIN_DRM_DEVICES` in both modes).
-- Read `gpu_busy_percent` / VRAM usage from
-  `/sys/class/drm/<card>/device/` and show it in the popup.
-- Detect eGPU presence (does `/dev/dri/amd_egpu` exist?) and grey out the
-  eGPU button when disconnected.
-- Confirmation dialog on the logout button.
-- Config page (`contents/config/`) to make device paths configurable instead
-  of hardcoded, so the widget ports to other machines without editing QML.
+- **N-GPU picker** — every detected GPU gets a card (name, vendor icon,
+  connected/disconnected state); click one to make it the compositing GPU.
+- **Auto (system default)** — clears the override and lets KWin choose.
+- **Live sensors per GPU** — VRAM used/total with a bar, utilization,
+  temperature. AMD via sysfs (`gpu_busy_percent`, `mem_info_vram_*`,
+  `hwmon`), NVIDIA via `nvidia-smi`, Intel is limited (no non-root sysfs
+  counters, shown as "—").
+- **Confirmations** — applying a mode and logging out both ask for
+  confirmation by default (configurable); nothing is written or applied
+  silently.
+- **Config page** — poll interval, a widget-mode toggle for whether sensors
+  keep polling continuously when the plasmoid sits on the desktop (it's
+  always visible there, so continuous polling costs extra wakeups/power),
+  a toggle to hide sensors entirely, and advanced per-GPU device-path
+  overrides for distros where auto-detection needs a hint.
+
+## Recovery
+
+If a login ever breaks after switching modes:
+
+1. Switch to a TTY: `Ctrl+Alt+F3`, log in there.
+2. Remove the override: `rm ~/.config/environment.d/kwin-gpu.conf`.
+3. Optionally also clear the symlink farm: `rm -rf ~/.local/share/gpumode/dev`.
+4. Switch back (`Ctrl+Alt+F1`/`F2`, whichever runs the display manager) and
+   log in normally — KWin will auto-pick with no override.
+
+## If your distro lacks `/dev/dri/by-path`
+
+Some distros/kernels don't ship the `by-path` udev links. If a GPU shows as
+detected but its by-path device is missing, use the **device overrides**
+field in the config page to point that PCI slot at a stable path of your
+own (e.g. a custom udev symlink) — one `pciSlot=devicePath` per line; the
+path must not contain a colon.
+
+## License
+
+GPL-3.0-only — see [LICENSE](LICENSE). Author: bladr.
