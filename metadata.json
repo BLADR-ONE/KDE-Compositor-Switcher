@@ -2,15 +2,19 @@
     "KPlugin": {
         "Authors": [
             {
-                "Name": "bladr"
+                "Name": "bladr",
+                "Email": "102288866+BLADR-ONE@users.noreply.github.com"
             }
         ],
+        "BugReportUrl": "https://github.com/BLADR-ONE/KDE-Compositor-Switcher/issues",
         "Category": "System Information",
-        "Description": "Switch KDE compositing between the 7900 XT eGPU and the Intel iGPU",
+        "Description": "Switch which GPU KWin composites on, with live per-GPU sensors.",
         "Icon": "video-display",
         "Id": "org.bladr.gpumode",
+        "License": "GPL-3.0-only",
         "Name": "GPU Mode",
-        "Version": "1.0"
+        "Version": "2.0",
+        "Website": "https://github.com/BLADR-ONE/KDE-Compositor-Switcher"
     },
     "KPackageStructure": "Plasma/Applet",
     "X-Plasma-API-Minimum-Version": "6.0",
