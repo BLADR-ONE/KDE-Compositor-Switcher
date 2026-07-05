@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+      http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+
+  <group name="General">
+    <entry name="pollIntervalMs" type="Int">
+      <label>Sensor polling interval in milliseconds.</label>
+      <default>2000</default>
+      <min>500</min>
+    </entry>
+    <entry name="widgetModeContinuousSensors" type="Bool">
+      <label>Keep sensors active in desktop-widget mode.</label>
+      <default>false</default>
+    </entry>
+    <entry name="showSensors" type="Bool">
+      <label>Show GPU sensors.</label>
+      <default>true</default>
+    </entry>
+    <entry name="confirmBeforeApply" type="Bool">
+      <label>Confirm before switching the compositing GPU.</label>
+      <default>true</default>
+    </entry>
+    <entry name="deviceOverrides" type="String">
+      <label>Multiline slot=devicePath overrides.</label>
+      <default></default>
+    </entry>
+  </group>
+</kcfg>
