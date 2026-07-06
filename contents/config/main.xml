@@ -23,6 +23,22 @@
       <label>Confirm before switching the compositing GPU.</label>
       <default>true</default>
     </entry>
+    <entry name="manualGpus" type="String">
+      <label>Manually added GPU entries.</label>
+      <default></default>
+    </entry>
+    <entry name="detectedGpusCache" type="String">
+      <label>Cached GPU snapshot for the configuration dialog.</label>
+      <default></default>
+    </entry>
+    <entry name="hiddenGpuSlots" type="String">
+      <label>Hidden GPU slots for the dashboard.</label>
+      <default></default>
+    </entry>
+    <entry name="ribbonTextAlignment" type="String">
+      <label>Default ribbon text alignment.</label>
+      <default>center</default>
+    </entry>
     <entry name="deviceOverrides" type="String">
       <label>Multiline slot=devicePath overrides.</label>
       <default></default>

@@ -10,13 +10,8 @@ Item {
     signal activated()
 
     property string slot: ""
-    property string vendor: ""
-    property string vendorLabel: ""
     property string icon: "video-display"
     property string name: ""
-    property string driver: ""
-    property bool bootVga: false
-    property string byPath: ""
     property bool present: true
     property string statsCapability: "none"
     property var stats: null
@@ -42,23 +37,28 @@ Item {
 
     function formatGiB(value) {
         if (!root.canShowStats() || !root.isValidNumber(value) || value < 0) {
-            return i18n("—")
+            return "—"
         }
         return GpuUtils.formatGiB(value)
     }
 
     function formatPercent(value) {
         if (!root.canShowStats() || !root.isValidNumber(value)) {
-            return i18n("—")
+            return "—"
         }
         return Math.round(value) + "%"
     }
 
     function formatTemperature(value) {
         if (!root.canShowStats() || !root.isValidNumber(value)) {
-            return i18n("—")
+            return "—"
         }
         return i18n("%1 °C", Math.round(value))
+    }
+
+    function accentAlpha(alpha) {
+        var accent = Kirigami.Theme.highlightColor
+        return Qt.rgba(accent.r, accent.g, accent.b, alpha)
     }
 
     Rectangle {
@@ -67,7 +67,7 @@ Item {
         color: root.present ? Kirigami.Theme.alternateBackgroundColor : Kirigami.Theme.backgroundColor
         border.width: 1
         border.color: root.selected
-            ? Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.7)
+            ? root.accentAlpha(0.7)
             : Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, root.present ? 0.12 : 0.08)
     }
 
@@ -122,9 +122,9 @@ Item {
                     Rectangle {
                         visible: root.selected
                         radius: height / 2
-                        color: Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.18)
+                        color: root.accentAlpha(0.18)
                         border.width: 1
-                        border.color: Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.45)
+                        border.color: root.accentAlpha(0.45)
                         implicitHeight: currentLabel.implicitHeight + Kirigami.Units.smallSpacing
                         implicitWidth: currentLabel.implicitWidth + Kirigami.Units.smallSpacing * 2
 
@@ -141,7 +141,7 @@ Item {
                 PC3.Label {
                     visible: !root.present
                     text: i18n("Disconnected")
-                    color: Kirigami.Theme.neutralTextColor
+                    color: Kirigami.Theme.textColor
                     font.pointSize: Kirigami.Theme.smallFont.pointSize
                 }
             }
@@ -153,9 +153,38 @@ Item {
             visible: root.showSensors
 
             PC3.Label {
+                text: i18n("Utilization")
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                color: Kirigami.Theme.textColor
+            }
+
+            PC3.ProgressBar {
+                Layout.fillWidth: true
+                from: 0
+                to: 100
+                visible: root.showSensors && root.statsCapability !== "none"
+                value: root.canShowStats() && root.isValidNumber(root.utilization)
+                    ? Math.max(0, Math.min(100, root.utilization))
+                    : 0
+                enabled: root.canShowStats()
+                opacity: root.canShowStats() ? 1 : 0.45
+            }
+
+            PC3.Label {
+                text: root.formatPercent(root.utilization)
+                font.pointSize: Kirigami.Theme.smallFont.pointSize
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing / 2
+            visible: root.showSensors
+
+            PC3.Label {
                 text: i18n("VRAM")
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
-                color: Kirigami.Theme.neutralTextColor
+                color: Kirigami.Theme.textColor
             }
 
             PC3.ProgressBar {
@@ -173,7 +202,7 @@ Item {
             PC3.Label {
                 text: root.canShowStats()
                     ? i18n("%1 used / %2 total", root.formatGiB(root.vramUsed), root.formatGiB(root.vramTotal))
-                    : i18n("—")
+                    : "—"
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
         }
@@ -186,21 +215,9 @@ Item {
             visible: root.showSensors
 
             PC3.Label {
-                text: i18n("Utilization")
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-                color: Kirigami.Theme.neutralTextColor
-            }
-
-            PC3.Label {
-                Layout.alignment: Qt.AlignRight
-                text: root.formatPercent(root.utilization)
-                font.pointSize: Kirigami.Theme.smallFont.pointSize
-            }
-
-            PC3.Label {
                 text: i18n("Temperature")
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
-                color: Kirigami.Theme.neutralTextColor
+                color: Kirigami.Theme.textColor
             }
 
             PC3.Label {
@@ -208,13 +225,6 @@ Item {
                 text: root.formatTemperature(root.temperature)
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
             }
-        }
-
-        PC3.Button {
-            Layout.alignment: Qt.AlignRight
-            enabled: root.present
-            text: i18n("Use for compositing")
-            onClicked: root.activated()
         }
     }
 }

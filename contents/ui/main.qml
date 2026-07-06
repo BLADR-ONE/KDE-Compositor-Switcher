@@ -7,9 +7,11 @@ PlasmoidItem {
     id: root
 
     property var gpus: []
+    property var detectedGpus: []
     property var statsBySlot: ({})
     readonly property string confPath: "$HOME/.config/environment.d/kwin-gpu.conf"
     readonly property string farmDir: "$HOME/.local/share/gpumode/dev"
+    property string applyErrorText: ""
 
     // Applied compositing GPU: "" = auto / not yet read, otherwise a PCI slot.
     property string currentSlot: ""
@@ -22,10 +24,18 @@ PlasmoidItem {
     readonly property bool desktopMode: Plasmoid.formFactor === PlasmaCore.Types.Planar
     readonly property bool showSensors: Plasmoid.configuration.showSensors !== false
     readonly property bool confirmBeforeApply: Plasmoid.configuration.confirmBeforeApply !== false
-    readonly property bool statsPollingActive: root.showSensors &&
-                                              (root.desktopMode
-                                               ? Plasmoid.configuration.widgetModeContinuousSensors === true
-                                               : root.expanded)
+    readonly property string ribbonTextAlignment: Plasmoid.configuration.ribbonTextAlignment || "center"
+    readonly property var visibleGpus: {
+        var hidden = GpuUtils.parseHiddenGpuSlots(Plasmoid.configuration.hiddenGpuSlots)
+        var visible = []
+        for (var i = 0; i < root.gpus.length; ++i) {
+            var gpu = root.gpus[i]
+            if (gpu && (!hidden[gpu.slot] || gpu.slot === root.currentSlot)) {
+                visible.push(gpu)
+            }
+        }
+        return visible
+    }
 
     // Derived compatibility mode string for the existing UI labels + compact rep.
     readonly property string mode: {
@@ -95,6 +105,23 @@ PlasmoidItem {
             return null
         }
         return root.statsBySlot[slot] || null
+    }
+
+    function statsPollingEnabled() {
+        return Plasmoid.configuration.showSensors !== false &&
+               (root.desktopMode
+                ? Plasmoid.configuration.widgetModeContinuousSensors === true
+                : root.expanded)
+    }
+
+    function updateStatsPolling() {
+        var enabled = root.statsPollingEnabled()
+        if (!enabled) {
+            root.statsBySlot = ({})
+        }
+        if (statsTimer.running !== enabled) {
+            statsTimer.running = enabled
+        }
     }
 
     function applyParsedMode(parsed) {
@@ -169,6 +196,120 @@ PlasmoidItem {
         }
     }
 
+    function refreshDetectedGpuCache(gpus) {
+        var serialized = GpuUtils.serializeDetectedGpusCache(gpus)
+        if (Plasmoid.configuration.detectedGpusCache !== serialized) {
+            Plasmoid.configuration.detectedGpusCache = serialized
+        }
+    }
+
+    function isValidManualSlot(slot) {
+        return /^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/.test(String(slot || ""))
+    }
+
+    function manualGpuPresenceCommand() {
+        var manualGpus = GpuUtils.parseManualGpus(Plasmoid.configuration.manualGpus)
+        var seen = {}
+        var parts = []
+        for (var i = 0; i < manualGpus.length; ++i) {
+            var manual = manualGpus[i]
+            var slot = String(manual.slot || "").trim()
+            var byPath = String(manual.byPath || "").trim()
+            if (!slot || !byPath || !root.isValidManualSlot(slot) || seen[slot]) {
+                continue
+            }
+            seen[slot] = true
+            parts.push("if [ -e " + GpuUtils.shellQuote(byPath) + " ]; then printf 'MANUAL|slot=%s|present=1\\n' " + GpuUtils.shellQuote(slot) +
+                       "; else printf 'MANUAL|slot=%s|present=0\\n' " + GpuUtils.shellQuote(slot) + "; fi")
+        }
+        return parts.join("\n")
+    }
+
+    function parseManualGpuPresence(stdout) {
+        var present = {}
+        var lines = String(stdout || "").split(/\r?\n/)
+        for (var i = 0; i < lines.length; ++i) {
+            var line = lines[i].trim()
+            if (!line || line.indexOf("MANUAL|") !== 0) {
+                continue
+            }
+            var parts = line.split("|")
+            var record = {}
+            for (var j = 1; j < parts.length; ++j) {
+                var part = parts[j]
+                var eq = part.indexOf("=")
+                if (eq === -1) {
+                    continue
+                }
+                record[part.slice(0, eq)] = part.slice(eq + 1)
+            }
+            var slot = record.slot || ""
+            if (!slot) {
+                continue
+            }
+            var flag = String(record.present || "").toLowerCase()
+            present[slot] = flag === "1" || flag === "true" || flag === "yes" || flag === "present"
+        }
+        return present
+    }
+
+    function probeManualGpuPresence(done) {
+        var command = root.manualGpuPresenceCommand()
+        if (!command) {
+            done({})
+            return
+        }
+        shell.exec(command, function (stdout) {
+            done(root.parseManualGpuPresence(stdout))
+        })
+    }
+
+    function mergeManualGpus(gpus, manualPresence) {
+        var merged = gpus.slice(0)
+        var seen = {}
+        for (var i = 0; i < merged.length; ++i) {
+            if (merged[i] && merged[i].slot) {
+                seen[merged[i].slot] = true
+            }
+        }
+
+        var manualGpus = GpuUtils.parseManualGpus(Plasmoid.configuration.manualGpus)
+        for (var j = 0; j < manualGpus.length; ++j) {
+            var manual = manualGpus[j]
+            var slot = String(manual.slot || "").trim()
+            var name = String(manual.name || "").trim()
+            var byPath = String(manual.byPath || "").trim()
+            if (!slot || !name || !byPath || !root.isValidManualSlot(slot) || seen[slot]) {
+                continue
+            }
+            seen[slot] = true
+            merged.push({
+                slot: slot,
+                name: name,
+                vendor: "",
+                vendorLabel: "Manual",
+                icon: "video-display",
+                driver: "",
+                bootVga: false,
+                byPath: byPath,
+                present: manualPresence && manualPresence[slot] === true,
+                statsCapability: "none"
+            })
+        }
+        return merged
+    }
+
+    function updateGpuModel(gpus, done) {
+        root.detectedGpus = gpus.slice(0)
+        root.refreshDetectedGpuCache(gpus)
+        root.probeManualGpuPresence(function (manualPresence) {
+            root.gpus = root.mergeManualGpus(gpus, manualPresence)
+            if (done) {
+                done()
+            }
+        })
+    }
+
     function applyNvidiaNames(gpus, stdout) {
         var lines = String(stdout || "").split(/\r?\n/)
         for (var i = 0; i < lines.length; ++i) {
@@ -203,19 +344,17 @@ PlasmoidItem {
             }
         }
 
-        if (hasNvidia) {
+        // nvidia-smi resumes a runtime-suspended dGPU just to read a name.
+        // Only pay that wakeup when sensors are actually being shown (same
+        // gate as stats polling); otherwise keep the lspci/fallback name so a
+        // disabled-sensor config never touches the GPU.
+        if (hasNvidia && root.statsPollingEnabled()) {
             shell.exec(nvidiaNameCommand(), function (nvidiaStdout) {
                 applyNvidiaNames(gpus, nvidiaStdout)
-                root.gpus = gpus
-                if (done) {
-                    done()
-                }
+                root.updateGpuModel(gpus, done)
             })
         } else {
-            root.gpus = gpus
-            if (done) {
-                done()
-            }
+            root.updateGpuModel(gpus, done)
         }
     }
 
@@ -243,17 +382,18 @@ PlasmoidItem {
         refreshGpuModel(function () {
             root.refreshInFlight = false
             root.readCurrentMode()
+            root.updateStatsPolling()
         })
     }
 
     function refreshStats() {
-        if (root.statsInFlight || !root.statsPollingActive) {
+        if (root.statsInFlight || !root.statsPollingEnabled()) {
             return
         }
         root.statsInFlight = true
         shell.exec(GpuUtils.buildStatsCommand(root.gpus), function (stdout) {
             try {
-                if (root.statsPollingActive) {
+                if (root.statsPollingEnabled()) {
                     root.statsBySlot = GpuUtils.parseStats(stdout)
                 }
             } finally {
@@ -266,14 +406,29 @@ PlasmoidItem {
         if (!slot) {
             return
         }
+        var gpu = root.gpuBySlot(slot)
+        if (!gpu || !gpu.present) {
+            root.applyErrorText = i18n("That GPU is no longer available.")
+            return
+        }
+        root.applyErrorText = ""
         shell.exec(GpuUtils.buildApplyCommand(root.gpus, slot, root.farmDir, root.confPath, Plasmoid.configuration.deviceOverrides),
-                   function (stdout) {
+                   function (stdout, stderr, exitCode) {
+            if (Number(exitCode) !== 0) {
+                root.applyErrorText = i18n("Failed to update the GPU setting (exit code %1).", exitCode)
+                return
+            }
             root.applyParsedMode(GpuUtils.parseCurrentMode(stdout, root.gpus, Plasmoid.configuration.deviceOverrides))
         })
     }
 
     function applyAuto() {
-        shell.exec(GpuUtils.buildAutoCommand(root.confPath), function () {
+        root.applyErrorText = ""
+        shell.exec(GpuUtils.buildAutoCommand(root.confPath), function (stdout, stderr, exitCode) {
+            if (Number(exitCode) !== 0) {
+                root.applyErrorText = i18n("Failed to restore automatic GPU selection (exit code %1).", exitCode)
+                return
+            }
             root.currentSlot = ""
             root.currentLoaded = true
         })
@@ -295,19 +450,28 @@ PlasmoidItem {
             }
         }
 
+        function onShowSensorsChanged() {
+            root.updateStatsPolling()
+        }
+
         function onConfirmBeforeApplyChanged() {
             if (!Plasmoid.configuration.confirmBeforeApply) {
                 root.pendingApplySlot = ""
             }
         }
-    }
 
-    // Polling stopped (popup collapsed, sensors hidden, or desktop-widget
-    // continuous sensors turned off): drop the last readings so the UI never
-    // presents stale data as live.
-    onStatsPollingActiveChanged: {
-        if (!statsPollingActive) {
-            root.statsBySlot = ({})
+        function onManualGpusChanged() {
+            if (root.currentLoaded || root.expanded) {
+                root.updateGpuModel(root.detectedGpus, function () {
+                    if (root.currentLoaded) {
+                        root.readCurrentMode()
+                    }
+                })
+            }
+        }
+
+        function onWidgetModeContinuousSensorsChanged() {
+            root.updateStatsPolling()
         }
     }
 
@@ -316,7 +480,7 @@ PlasmoidItem {
         interval: Plasmoid.configuration.pollIntervalMs
         repeat: true
         triggeredOnStart: true
-        running: root.statsPollingActive
+        running: false
         onTriggered: root.refreshStats()
     }
 
@@ -324,6 +488,7 @@ PlasmoidItem {
         if (!root.expanded) {
             root.logoutPending = false
             root.pendingApplySlot = ""
+            root.updateStatsPolling()
             return
         }
         refresh()

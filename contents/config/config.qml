@@ -6,4 +6,10 @@ ConfigModel {
         icon: "configure"
         source: "ConfigGeneral.qml"
     }
+
+    ConfigCategory {
+        name: i18n("GPUs")
+        icon: "video-card"
+        source: "ConfigGpus.qml"
+    }
 }

@@ -72,6 +72,101 @@ function parseDeviceOverrides(text) {
     return overrides
 }
 
+function parseManualGpus(text) {
+    var gpus = []
+    var lines = String(text || "").split(/\r?\n/)
+    for (var i = 0; i < lines.length; ++i) {
+        var line = lines[i].trim()
+        if (!line) {
+            continue
+        }
+        var first = line.indexOf("|")
+        var second = first === -1 ? -1 : line.indexOf("|", first + 1)
+        if (first === -1 || second === -1) {
+            continue
+        }
+        gpus.push({
+            name: line.slice(0, first).trim(),
+            slot: line.slice(first + 1, second).trim(),
+            byPath: line.slice(second + 1).trim()
+        })
+    }
+    return gpus
+}
+
+function serializeManualGpus(gpus) {
+    var lines = []
+    for (var i = 0; i < gpus.length; ++i) {
+        var gpu = gpus[i] || {}
+        lines.push(String(gpu.name || "") + "|" + String(gpu.slot || "") + "|" + String(gpu.byPath || ""))
+    }
+    return lines.join("\n")
+}
+
+function parseDetectedGpusCache(text) {
+    var gpus = []
+    var lines = String(text || "").split(/\r?\n/)
+    for (var i = 0; i < lines.length; ++i) {
+        var line = lines[i].trim()
+        if (!line) {
+            continue
+        }
+        var sep = line.indexOf("|")
+        if (sep === -1) {
+            continue
+        }
+        gpus.push({
+            slot: line.slice(0, sep).trim(),
+            name: line.slice(sep + 1).trim()
+        })
+    }
+    return gpus
+}
+
+function serializeDetectedGpusCache(gpus) {
+    var lines = []
+    for (var i = 0; i < gpus.length; ++i) {
+        var gpu = gpus[i] || {}
+        lines.push(String(gpu.slot || "") + "|" + String(gpu.name || ""))
+    }
+    return lines.join("\n")
+}
+
+function parseHiddenGpuSlots(text) {
+    var hidden = {}
+    var lines = String(text || "").split(/\r?\n/)
+    for (var i = 0; i < lines.length; ++i) {
+        var slot = lines[i].trim()
+        if (slot) {
+            hidden[slot] = true
+        }
+    }
+    return hidden
+}
+
+function serializeHiddenGpuSlots(hiddenSlots) {
+    var slots = []
+    if (Array.isArray(hiddenSlots)) {
+        for (var i = 0; i < hiddenSlots.length; ++i) {
+            var slot = String(hiddenSlots[i] || "").trim()
+            if (slot) {
+                slots.push(slot)
+            }
+        }
+    } else {
+        for (var key in hiddenSlots) {
+            if (!Object.prototype.hasOwnProperty.call(hiddenSlots, key)) {
+                continue
+            }
+            if (hiddenSlots[key]) {
+                slots.push(String(key).trim())
+            }
+        }
+    }
+    slots.sort()
+    return slots.join("\n")
+}
+
 function overridePathForSlot(overrides, slot) {
     if (!overrides || !slot) {
         return ""
